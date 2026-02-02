@@ -1,0 +1,7 @@
+Flask
+flask-cors
+flask-limiter
+requests
+tldextract
+python-dotenv
+python-whois

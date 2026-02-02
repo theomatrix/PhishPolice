@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PhishPolice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #07071a;
+      --bg-secondary: #0f0f24;
+      --bg-card: rgba(15, 15, 36, 0.9);
+      --bg-glass: rgba(255, 255, 255, 0.03);
+      --border-glass: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(255, 255, 255, 0.15);
+      --text-primary: #ffffff;
+      --text-secondary: #8b8b9e;
+      --text-muted: #5a5a6e;
+      --safe-color: #00e5b0;
+      --safe-glow: rgba(0, 229, 176, 0.3);
+      --safe-bg: rgba(0, 229, 176, 0.12);
+      --suspicious-color: #ffc107;
+      --suspicious-glow: rgba(255, 193, 7, 0.3);
+      --suspicious-bg: rgba(255, 193, 7, 0.12);
+      --phish-color: #ff4d6a;
+      --phish-glow: rgba(255, 77, 106, 0.3);
+      --phish-bg: rgba(255, 77, 106, 0.12);
+      --accent-start: #6366f1;
+      --accent-end: #a855f7;
+      --accent-gradient: linear-gradient(135deg, var(--accent-start) 0%, var(--accent-end) 100%);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      width: 400px;
+      height: 560px;
+      overflow: hidden;
+    }
+
+    .bg-mesh {
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 100% 60% at 10% -20%, rgba(99, 102, 241, 0.25) 0%, transparent 50%),
+        radial-gradient(ellipse 80% 50% at 90% 100%, rgba(168, 85, 247, 0.2) 0%, transparent 50%);
+      z-index: -1;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 20px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      background: var(--accent-gradient);
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: 0 4px 24px rgba(99, 102, 241, 0.4);
+    }
+
+    .brand h1 {
+      font-size: 22px;
+      font-weight: 800;
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+
+    .brand .tagline {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 16px;
+      background: var(--bg-secondary);
+      padding: 4px;
+      border-radius: 12px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .tab-btn.active {
+      background: var(--accent-gradient);
+      color: white;
+      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.3);
+    }
+
+    .tab-content {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .tab-content.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Status Card */
+    .status-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border-glass);
+      border-radius: 20px;
+      padding: 24px 20px;
+      margin-bottom: 14px;
+      text-align: center;
+    }
+
+    .threat-ring {
+      width: 130px;
+      height: 130px;
+      margin: 0 auto 20px;
+      position: relative;
+    }
+
+    .threat-ring svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .threat-ring .bg-circle {
+      fill: none;
+      stroke: var(--bg-secondary);
+      stroke-width: 10;
+    }
+
+    .threat-ring .progress-circle {
+      fill: none;
+      stroke-width: 10;
+      stroke-linecap: round;
+      stroke-dasharray: 377;
+      stroke-dashoffset: 377;
+      transition: stroke-dashoffset 1s ease, stroke 0.3s ease;
+      filter: drop-shadow(0 0 8px currentColor);
+    }
+
+    .threat-ring .progress-circle.scanning {
+      animation: scanPulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes scanPulse {
+
+      0%,
+      100% {
+        stroke-dashoffset: 377;
+        opacity: 0.5;
+      }
+
+      50% {
+        stroke-dashoffset: 250;
+        opacity: 1;
+      }
+    }
+
+    .threat-ring .score-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+
+    .threat-ring .score-value {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .threat-ring .score-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .verdict-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      border-radius: 50px;
+      font-weight: 600;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 12px;
+    }
+
+    .verdict-badge.safe {
+      background: var(--safe-bg);
+      color: var(--safe-color);
+      box-shadow: 0 0 20px var(--safe-glow);
+    }
+
+    .verdict-badge.suspicious {
+      background: var(--suspicious-bg);
+      color: var(--suspicious-color);
+      box-shadow: 0 0 20px var(--suspicious-glow);
+    }
+
+    .verdict-badge.phish {
+      background: var(--phish-bg);
+      color: var(--phish-color);
+      box-shadow: 0 0 20px var(--phish-glow);
+      animation: dangerPulse 2s infinite;
+    }
+
+    .verdict-badge.loading {
+      background: rgba(99, 102, 241, 0.12);
+      color: var(--accent-start);
+    }
+
+    .verdict-badge.error {
+      background: rgba(255, 77, 106, 0.1);
+      color: #ff6b7a;
+    }
+
+    @keyframes dangerPulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 20px var(--phish-glow);
+      }
+
+      50% {
+        box-shadow: 0 0 35px var(--phish-glow);
+      }
+    }
+
+    .url-display {
+      font-size: 11px;
+      color: var(--text-secondary);
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 8px;
+      word-break: break-all;
+    }
+
+    .domain-info {
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      margin-top: 8px;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .domain-info.danger {
+      background: var(--phish-bg);
+      color: var(--phish-color);
+      animation: dangerPulse 2s ease-in-out infinite;
+    }
+
+    .domain-info.warning {
+      background: var(--suspicious-bg);
+      color: var(--suspicious-color);
+    }
+
+    .domain-info.neutral {
+      background: rgba(100, 100, 100, 0.2);
+      color: var(--text-secondary);
+    }
+
+    .domain-info.safe {
+      background: var(--safe-bg);
+      color: var(--safe-color);
+    }
+
+    /* AI Analysis */
+    .ai-analysis-section {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.08) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.15);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .ai-analysis-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .ai-icon {
+      font-size: 14px;
+    }
+
+    .ai-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      flex: 1;
+    }
+
+    .ai-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 20px;
+      background: var(--accent-gradient);
+      color: white;
+      letter-spacing: 0.3px;
+    }
+
+    .ai-summary {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 8px;
+      border-left: 3px solid var(--accent-start);
+    }
+
+    .ai-summary.loading {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .ai-recommendation {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 10px;
+      background: rgba(0, 229, 176, 0.08);
+      border-radius: 8px;
+      border: 1px solid rgba(0, 229, 176, 0.15);
+    }
+
+    .recommendation-icon {
+      font-size: 13px;
+    }
+
+    .ai-recommendation span:last-child {
+      font-size: 12px;
+      color: var(--safe-color);
+      line-height: 1.4;
+    }
+
+    /* Evidence Section */
+    .evidence-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .evidence-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .evidence-list {
+      list-style: none;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    .evidence-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border-glass);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .evidence-item:last-child {
+      border-bottom: none;
+    }
+
+    .evidence-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .evidence-icon.info {
+      background: rgba(99, 102, 241, 0.15);
+    }
+
+    .evidence-icon.warning {
+      background: var(--suspicious-bg);
+    }
+
+    .evidence-icon.danger {
+      background: var(--phish-bg);
+    }
+
+    .timestamp {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-align: center;
+      margin-top: 10px;
+    }
+
+    /* No Analysis */
+    .no-analysis {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px;
+    }
+
+    .no-analysis-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.4;
+    }
+
+    .no-analysis h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .no-analysis p {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* History Tab */
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .history-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .clear-btn {
+      font-size: 11px;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .clear-btn:hover {
+      color: var(--phish-color);
+    }
+
+    .history-list {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-glass);
+      border-radius: 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .history-item:hover {
+      border-color: var(--border-hover);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .history-verdict {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .history-verdict.safe {
+      background: var(--safe-bg);
+      color: var(--safe-color);
+    }
+
+    .history-verdict.suspicious {
+      background: var(--suspicious-bg);
+      color: var(--suspicious-color);
+    }
+
+    .history-verdict.phish {
+      background: var(--phish-bg);
+      color: var(--phish-color);
+    }
+
+    .history-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .history-hostname {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .history-meta {
+      display: flex;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .history-arrow {
+      color: var(--text-muted);
+      font-size: 18px;
+    }
+
+    .empty-history {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px;
+    }
+
+    .empty-history-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+      opacity: 0.3;
+    }
+
+    .empty-history p {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Footer */
+    .footer {
+      display: flex;
+      gap: 10px;
+      padding-top: 12px;
+      margin-top: auto;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--accent-gradient);
+      color: white;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+    }
+
+    .btn-primary:not(:disabled):hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(99, 102, 241, 0.45);
+    }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border-glass);
+    }
+
+    .btn-secondary:not(:disabled):hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border-hover);
+    }
+
+    .btn-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 500;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .toast-success {
+      background: var(--safe-bg);
+      color: var(--safe-color);
+      border: 1px solid rgba(0, 229, 176, 0.3);
+    }
+
+    .toast-error {
+      background: var(--phish-bg);
+      color: var(--phish-color);
+      border: 1px solid rgba(255, 77, 106, 0.3);
+    }
+
+    .toast-info {
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent-start);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-glass);
+      border-radius: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="bg-mesh"></div>
+  <div class="container">
+    <header class="header">
+      <div class="logo">🛡️</div>
+      <div class="brand">
+        <h1>PhishPolice</h1>
+        <span class="tagline">Your Web Guardian</span>
+      </div>
+    </header>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="scan">🔍 Scan</button>
+      <button class="tab-btn" data-tab="history">📜 History</button>
+    </div>
+
+    <!-- Scan Tab -->
+    <div class="tab-content active" id="scanTab">
+      <div class="no-analysis" id="noAnalysis">
+        <div class="no-analysis-icon">🔍</div>
+        <h3>Ready to Protect</h3>
+        <p>Click Scan to analyze the current page for phishing threats.</p>
+      </div>
+
+      <div id="analysisResult" style="display: none;">
+        <div class="status-card">
+          <div class="threat-ring">
+            <svg viewBox="0 0 140 140">
+              <circle class="bg-circle" cx="70" cy="70" r="60" />
+              <circle class="progress-circle" id="progressCircle" cx="70" cy="70" r="60" />
+            </svg>
+            <div class="score-text">
+              <div class="score-value" id="scoreValue">0%</div>
+              <div class="score-label">Risk Score</div>
+            </div>
+          </div>
+          <div class="verdict-badge" id="verdictBadge">
+            <span id="verdictIcon">●</span>
+            <span id="verdictText">Analyzing...</span>
+          </div>
+          <div class="url-display" id="urlDisplay">-</div>
+          <div class="domain-info" id="domainInfo" style="display: none;">📅 Domain age: Unknown</div>
+        </div>
+
+        <div class="ai-analysis-section" id="aiAnalysisSection">
+          <div class="ai-analysis-header">
+            <span class="ai-icon">🤖</span>
+            <span class="ai-title">AI Analysis</span>
+            <span class="ai-badge">Gemini</span>
+          </div>
+          <div class="ai-summary" id="aiSummary">Analyzing...</div>
+          <div class="ai-recommendation" id="aiRecommendation" style="display: none;">
+            <span class="recommendation-icon">💡</span>
+            <span id="aiRecommendationText"></span>
+          </div>
+        </div>
+
+        <div class="evidence-section">
+          <div class="evidence-title"><span>📋</span> Security Details</div>
+          <ul class="evidence-list" id="evidenceList"></ul>
+        </div>
+
+        <div class="timestamp" id="timestamp"></div>
+      </div>
+    </div>
+
+    <!-- History Tab -->
+    <div class="tab-content" id="historyTab">
+      <div class="history-header">
+        <h3>Recent Scans</h3>
+        <button class="clear-btn" id="clearHistoryBtn">Clear All</button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+      <div class="empty-history" id="emptyHistory">
+        <div class="empty-history-icon">📭</div>
+        <p>No scan history yet.<br>Start scanning pages to see them here.</p>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <button class="btn btn-secondary" id="rescanBtn"><span>🔄</span> Scan</button>
+      <button class="btn btn-primary" id="reportBtn"><span>🚨</span> Report</button>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
