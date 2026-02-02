@@ -73,3 +73,5 @@ Multi-factor weighted scoring system:
 - Form Behavior Analysis: 10%
 - Domain Reputation: 8%
 - DOM/Behavior Patterns: 5%
+<hr>
+MADE WITH KIRO AS SAID ON THE DASHBOARD
