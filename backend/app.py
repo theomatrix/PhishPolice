@@ -20,7 +20,7 @@ if env_path.exists():
 from utils.domain_checks import quick_domain_checks
 from utils.visual_analysis import analyze_visual, get_visual_risk_score, format_visual_summary
 from utils.ssl_check import get_ssl_certificate_info, format_ssl_summary
-from utils.llm_proxy import analyze_with_gemini
+from utils.llm_proxy import analyze_with_llm
 from utils.typosquat_scanner import detect_typosquatting, get_typosquat_risk_score, format_typosquat_summary
 from utils.ct_monitor import check_certificate_transparency, get_ct_risk_score, format_ct_summary
 from utils.domain_age import check_domain_age, get_domain_age_risk_score, format_domain_age_summary
@@ -107,33 +107,41 @@ def analyze():
     
     try:
         print(f"[PhishPolice] Analyzing: {hostname}", file=sys.stderr)
-        
-        # === NEW: Typosquatting Detection ===
+        # Typosquatting Detection
         typosquat_result = detect_typosquatting(hostname)
         typosquat_risk, typosquat_evidence = get_typosquat_risk_score(hostname)
-        print(f"[PhishPolice] Typosquat check: {typosquat_result['is_typosquat']}", file=sys.stderr)
         
         # SSL certificate verification
         ssl_info = get_ssl_certificate_info(url)
         ssl_summary = format_ssl_summary(ssl_info)
         
-        # === NEW: Certificate Transparency Check ===
+        # Certificate Transparency Check
         ct_result = check_certificate_transparency(hostname)
         ct_risk, ct_evidence = get_ct_risk_score(hostname)
-        print(f"[PhishPolice] CT check complete: {ct_result.get('recent_certs_count', 0)} certs", file=sys.stderr)
         
         # Domain analysis
         domain_info = quick_domain_checks(url)
         
-        # === NEW: Domain Age Check via WHOIS ===
+        # Domain Age Check via WHOIS
         domain_age_result = check_domain_age(hostname)
         domain_age_risk, domain_age_evidence = get_domain_age_risk_score(hostname)
-        print(f"[PhishPolice] Domain age: {domain_age_result.get('age_days')} days, risk={domain_age_risk}", file=sys.stderr)
         
-        # Visual analysis (screenshot to Gemini Vision)
-        visual_info = analyze_visual(image_b64, hostname)
-        visual_risk, visual_evidence = get_visual_risk_score(visual_info)
-        print(f"[PhishPolice] Visual analysis: brand={visual_info.get('detected_brand')}, risk={visual_risk}", file=sys.stderr)
+        # Visual analysis (screenshot to AI vision model)
+        try:
+            visual_info = analyze_visual(image_b64, hostname)
+            visual_risk, visual_evidence = get_visual_risk_score(visual_info)
+        except Exception:
+            visual_info = {
+                "analyzed": False,
+                "detected_brand": None,
+                "is_login_page": False,
+                "has_urgency_elements": False,
+                "brand_match_confidence": 0,
+                "visual_risk_score": 0.0,
+                "findings": ["Visual analysis error"],
+                "summary": ""
+            }
+            visual_risk, visual_evidence = 0.0, []
         
         # DOM analysis metrics
         dom_analysis = {
@@ -144,16 +152,23 @@ def analyze():
             "hidden_iframes": len([p for p in suspicious_patterns if "hidden_iframe" in p.lower()]) if suspicious_patterns else 0
         }
         
-        # LLM-powered analysis
-        llm_analysis = analyze_with_gemini(
-            url=url,
-            hostname=hostname,
-            ssl_info=ssl_info,
-            domain_info=domain_info,
-            forms=forms,
-            suspicious_patterns=suspicious_patterns,
-            dom_analysis=dom_analysis
-        )
+        # LLM-powered analysis (with fallback on failure)
+        try:
+            llm_analysis = analyze_with_llm(
+                url=url,
+                hostname=hostname,
+                ssl_info=ssl_info,
+                domain_info=domain_info,
+                forms=forms,
+                suspicious_patterns=suspicious_patterns,
+                dom_analysis=dom_analysis
+            )
+        except Exception:
+            llm_analysis = {
+                "summary": "AI analysis unavailable",
+                "risk_factors": [],
+                "recommendation": "Review security details below"
+            }
         
         # Calculate multi-factor risk score (includes all factors including domain age)
         risk_score = calculate_risk_score(
@@ -206,6 +221,7 @@ def analyze():
                 "recommendation": llm_analysis.get("recommendation", "")
             }
         }
+        
         return jsonify(resp)
         
     except Exception as e:
@@ -370,5 +386,5 @@ if __name__ == "__main__":
     DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     HOST = "127.0.0.1"
     print(f"🛡️ PhishPolice Backend v2.2 starting on {HOST}:5000", file=sys.stderr)
-    print(f"   Features: Typosquat, Domain Age, CT Monitor, Visual Analysis, Gemini AI", file=sys.stderr)
+    print(f"   Features: Typosquat, Domain Age, CT Monitor, Visual Analysis, NVIDIA AI", file=sys.stderr)
     app.run(host=HOST, port=5000, debug=DEBUG)
