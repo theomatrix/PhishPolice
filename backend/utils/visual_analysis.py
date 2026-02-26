@@ -1,10 +1,12 @@
 """
 Visual Analysis Module
-Analyzes webpage screenshots using Gemini Vision to detect:
+Analyzes webpage screenshots using AI vision models to detect:
 - Brand impersonation (fake logos, copied designs)
 - Login page mimicry
 - Urgency/fear-based UI elements
 - Suspicious overlays or popups
+
+Uses NVIDIA Mistral Small 3.1 24B - multimodal model with vision capabilities.
 """
 
 import os
@@ -26,13 +28,18 @@ def load_env():
 
 load_env()
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_VISION_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
+NVIDIA_VISION_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NVIDIA_VISION_MODEL = "mistralai/mistral-small-3.1-24b-instruct-2503"
+
+# Configuration
+ENABLE_VISUAL_ANALYSIS = True
+VISUAL_TIMEOUT = 20
 
 
 def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
     """
-    Analyze a webpage screenshot using Gemini Vision.
+    Analyze a webpage screenshot using AI vision model.
     
     Args:
         image_b64: Base64 encoded PNG image of the webpage
@@ -52,51 +59,59 @@ def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
         "summary": ""
     }
     
-    # Skip if no image provided
     if not image_b64 or len(image_b64) < 100:
         result["findings"].append("No screenshot provided")
         return result
     
-    api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "").strip()
+    if not ENABLE_VISUAL_ANALYSIS:
+        result["findings"].append("Visual analysis disabled")
+        return result
+    
+    api_key = NVIDIA_API_KEY or os.environ.get("NVIDIA_API_KEY", "").strip()
     
     if not api_key:
         result["findings"].append("Visual analysis unavailable - API key not configured")
         return result
     
-    print(f"[PhishPolice] Visual analysis starting for: {hostname}", file=sys.stderr)
-    
-    # Build the vision prompt
     prompt = build_vision_prompt(hostname)
     
     try:
         response = requests.post(
-            f"{GEMINI_VISION_URL}?key={api_key}",
-            headers={"Content-Type": "application/json"},
+            NVIDIA_VISION_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json"
+            },
             json={
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
+                "model": NVIDIA_VISION_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
                         {
-                            "inline_data": {
-                                "mime_type": "image/png",
-                                "data": image_b64
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{image_b64}"
                             }
                         }
                     ]
                 }],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 400,
-                    "topP": 0.8
-                }
+                "max_tokens": 512,
+                "temperature": 0.20,
+                "top_p": 0.70,
+                "frequency_penalty": 0.00,
+                "presence_penalty": 0.00,
+                "stream": False
             },
-            timeout=30
+            timeout=VISUAL_TIMEOUT
         )
-        
-        print(f"[PhishPolice] Visual API response: {response.status_code}", file=sys.stderr)
         
         if response.status_code == 429:
             result["findings"].append("Visual analysis rate limited")
+            return result
+        
+        if response.status_code == 401:
+            result["findings"].append("Visual analysis authentication failed")
             return result
         
         if response.status_code != 200:
@@ -104,39 +119,35 @@ def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
             return result
         
         data = response.json()
-        candidates = data.get("candidates", [])
         
-        if not candidates:
+        choices = data.get("choices", [])
+        if not choices:
             result["findings"].append("No visual analysis response")
             return result
         
-        content = candidates[0].get("content", {})
-        parts = content.get("parts", [])
+        message = choices[0].get("message", {})
+        llm_response = message.get("content", "")
         
-        if not parts:
+        if not llm_response:
             result["findings"].append("Empty visual analysis response")
             return result
         
-        llm_response = parts[0].get("text", "")
-        
-        # Parse the structured response
         parsed = parse_vision_response(llm_response)
         result.update(parsed)
         result["analyzed"] = True
-        
-        print(f"[PhishPolice] Visual analysis complete: brand={result.get('detected_brand')}, risk={result.get('visual_risk_score')}", file=sys.stderr)
         
         return result
         
     except requests.Timeout:
         result["findings"].append("Visual analysis timed out")
         return result
-    except requests.RequestException as e:
-        print(f"[PhishPolice] Visual analysis error: {e}", file=sys.stderr)
+    except requests.ConnectionError:
+        result["findings"].append("Visual analysis connection failed")
+        return result
+    except requests.RequestException:
         result["findings"].append("Visual analysis request failed")
         return result
-    except Exception as e:
-        print(f"[PhishPolice] Visual parse error: {e}", file=sys.stderr)
+    except Exception:
         result["findings"].append("Visual analysis error")
         return result
 
