@@ -342,24 +342,11 @@ Health check endpoint.
 
 - [ ] Firefox extension support
 - [ ] Whitelisting trusted domains
-- [ ] Domain age checking via WHOIS
 - [ ] Link scanning before click
 - [ ] Email header analysis
 - [ ] Crowdsourced threat reporting
 
 ---
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [Google Gemini](https://deepmind.google/technologies/gemini/) - AI analysis
-- [crt.sh](https://crt.sh/) - Certificate Transparency data
-- [tldextract](https://github.com/john-googler/tldextract) - Domain parsing
 
 ---
 
