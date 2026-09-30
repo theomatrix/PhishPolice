@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/platform-Chrome-yellow.svg" alt="Platform">
 </p>
 
+[![Open Source Helpers](https://www.codetriage.com/theomatrix/phishpolice/badges/users.svg)](https://www.codetriage.com/theomatrix/phishpolice)
 ---
 
 ## 🌟 Overview
