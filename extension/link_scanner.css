@@ -1,0 +1,251 @@
+/* link_scanner.css – PhishPolice injected styles
+   Declared in manifest.json → bypasses host page CSP entirely.
+   All selectors are pp-namespaced to avoid conflicts.        */
+
+/* ── Tooltip card ─────────────────────────────────────────────── */
+#pp-tip {
+  all: initial;
+  position: fixed;
+  z-index: 2147483647;
+  width: 300px;
+  background: #F8FAF9;
+  color: #10201C;
+  border: 1px solid #D3DBD8;
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 14px 34px -12px rgba(0,0,0,.35);
+  font: 500 14px/1.45 system-ui, sans-serif;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity .15s, transform .15s, visibility 0s linear .15s;
+}
+#pp-tip.pp-show {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity .15s, transform .15s, visibility 0s;
+}
+@media (max-width: 500px) and (pointer: coarse) {
+  /* phones: slide up from bottom edge */
+  #pp-tip {
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  #pp-tip { background: #131F1B; color: #E7F0EC; border-color: #26362F; }
+}
+
+.pp-tip-h { display: flex; align-items: center; gap: 10px; }
+
+/* ── Dot icons ────────────────────────────────────────────────── */
+.pp-dot {
+  flex: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.pp-dot svg { width: 12px; height: 12px; }
+.pp-dot.pp-safe { background: #D8EEE5; color: #0E7A5A; }
+.pp-dot.pp-warn { background: #F6E7BD; color: #9A6A00; }
+.pp-dot.pp-bad  { background: #F6D9D3; color: #C03324; }
+.pp-dot.pp-spin {
+  border: 2px solid #D3DBD8;
+  border-top-color: #10201C;
+  animation: pp-rot .7s linear infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .pp-dot.pp-safe { background: #12392D; color: #4FD0A0; }
+  .pp-dot.pp-warn { background: #3A2F10; color: #E8B93C; }
+  .pp-dot.pp-bad  { background: #431C16; color: #FF7A67; }
+  .pp-dot.pp-spin { border-color: #26362F; border-top-color: #E7F0EC; }
+}
+
+/* ── Verdict word ─────────────────────────────────────────────── */
+.pp-word {
+  font-family: "Trebuchet MS", system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -.01em;
+}
+.pp-word.pp-safe { color: #0E7A5A; }
+.pp-word.pp-warn { color: #9A6A00; }
+.pp-word.pp-bad  { color: #C03324; }
+@media (prefers-color-scheme: dark) {
+  .pp-word.pp-safe { color: #4FD0A0; }
+  .pp-word.pp-warn { color: #E8B93C; }
+  .pp-word.pp-bad  { color: #FF7A67; }
+}
+
+/* ── Body text ────────────────────────────────────────────────── */
+.pp-host {
+  font-size: 12px;
+  color: #5C6B66;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.pp-why {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.pp-why li {
+  padding-left: 14px;
+  position: relative;
+}
+.pp-why li::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 7px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #5C6B66;
+}
+.pp-act {
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid #D3DBD8;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+@media (prefers-color-scheme: dark) { .pp-act { border-top-color: #26362F; } }
+.pp-act.pp-safe { color: #0E7A5A; }
+.pp-act.pp-warn { color: #9A6A00; }
+.pp-act.pp-bad  { color: #C03324; }
+@media (prefers-color-scheme: dark) {
+  .pp-act.pp-safe { color: #4FD0A0; }
+  .pp-act.pp-warn { color: #E8B93C; }
+  .pp-act.pp-bad  { color: #FF7A67; }
+}
+.pp-by { font-size: 11px; font-weight: 500; color: #5C6B66; }
+
+/* ── Stop / warning overlay ───────────────────────────────────── */
+#pp-stop {
+  all: initial;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: rgba(8,16,14,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font: 500 14px/1.55 system-ui, sans-serif;
+  animation: pp-fade .2s;
+}
+.pp-stop-card {
+  width: 100%;
+  max-width: 400px;
+  background: #F8FAF9;
+  color: #10201C;
+  border-radius: 18px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 5px solid #C03324;
+  animation: pp-up .28s cubic-bezier(.2,.9,.3,1);
+}
+@media (prefers-color-scheme: dark) {
+  .pp-stop-card { background: #131F1B; color: #E7F0EC; }
+}
+.pp-stop-h {
+  font-family: "Trebuchet MS", system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -.015em;
+}
+.pp-stop-p { font-size: 14px; line-height: 1.55; color: #5C6B66; }
+.pp-stop-url {
+  display: block;
+  background: #E9EEEC;
+  color: #10201C;
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 13px;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+@media (prefers-color-scheme: dark) {
+  .pp-stop-url { background: #0B1411; color: #E7F0EC; }
+}
+.pp-btn {
+  border-radius: 11px;
+  padding: 12px;
+  font: 600 14px system-ui, sans-serif;
+  cursor: pointer;
+  border: 1px solid #10201C;
+  background: #10201C;
+  color: #F8FAF9;
+  width: 100%;
+}
+.pp-btn-ghost {
+  background: transparent;
+  border: 0;
+  color: #5C6B66;
+  font: 500 13px system-ui, sans-serif;
+  text-decoration: underline;
+  padding: 6px;
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+}
+
+/* ── Link dot badge & wavy underline ─────────────────────────── */
+a[data-pp-v]::after,
+button[data-pp-v]::after {
+  content: "";
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  margin-left: 5px;
+  vertical-align: 1px;
+  opacity: 0;
+  transform: scale(0);
+  transition: transform .25s cubic-bezier(.3,1.6,.5,1), opacity .2s;
+}
+a[data-pp-v="done"]::after,
+button[data-pp-v="done"]::after { opacity: 1; transform: scale(1); }
+
+a[data-pp-bad]::after,
+button[data-pp-bad]::after  { background: #C03324; }
+a[data-pp-warn]::after,
+button[data-pp-warn]::after { background: #9A6A00; }
+a[data-pp-safe]::after,
+button[data-pp-safe]::after { background: #0E7A5A; }
+
+a[data-pp-bad],
+button[data-pp-bad] {
+  text-decoration: underline wavy #C03324 !important;
+  text-underline-offset: 4px !important;
+}
+
+/* ── Keyframes ────────────────────────────────────────────────── */
+@keyframes pp-rot  { to { transform: rotate(360deg); } }
+@keyframes pp-fade { from { opacity: 0; } }
+@keyframes pp-up   { from { transform: translateY(24px); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  #pp-tip,
+  a[data-pp-v]::after,
+  button[data-pp-v]::after { transition: none; }
+  #pp-stop, .pp-stop-card  { animation: none; }
+  .pp-dot.pp-spin          { animation: none; }
+}
+

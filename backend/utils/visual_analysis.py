@@ -6,7 +6,7 @@ Analyzes webpage screenshots using AI vision models to detect:
 - Urgency/fear-based UI elements
 - Suspicious overlays or popups
 
-Uses NVIDIA Mistral Small 3.1 24B - multimodal model with vision capabilities.
+Uses NVIDIA Mistral Large (mistralai/mistral-large-4-1t-a52b) multimodal model with vision capabilities.
 """
 
 import os
@@ -15,26 +15,31 @@ import requests
 from typing import Dict, Any
 from pathlib import Path
 
-# Load env
+# Load env without overriding existing environment variables
 def load_env():
     env_path = Path(__file__).parent.parent / '.env'
     if env_path.exists():
-        with open(env_path, 'r') as f:
+        with open(env_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+                    k = key.strip()
+                    if k not in os.environ:
+                        os.environ[k] = value.strip().strip('"').strip("'")
 
 load_env()
 
+DEFAULT_NVIDIA_VISION_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+DEFAULT_NVIDIA_VISION_MODEL = "z-ai/glm-5.3-flash"
+
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
-NVIDIA_VISION_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-NVIDIA_VISION_MODEL = "mistralai/mistral-small-3.1-24b-instruct-2503"
+NVIDIA_VISION_URL = os.environ.get("NVIDIA_VISION_URL", DEFAULT_NVIDIA_VISION_URL).strip()
+NVIDIA_VISION_MODEL = os.environ.get("NVIDIA_VISION_MODEL", DEFAULT_NVIDIA_VISION_MODEL).strip()
 
 # Configuration
 ENABLE_VISUAL_ANALYSIS = True
-VISUAL_TIMEOUT = 20
+VISUAL_TIMEOUT = int(os.environ.get("VISUAL_TIMEOUT", 10))  # Default 10s timeout
 
 
 def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
@@ -76,34 +81,43 @@ def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
     prompt = build_vision_prompt(hostname)
     
     try:
+        raw_url = NVIDIA_VISION_URL or DEFAULT_NVIDIA_VISION_URL
+        api_url = raw_url if raw_url.endswith("/chat/completions") else f"{raw_url.rstrip('/')}/chat/completions"
+        img_url = image_b64 if image_b64.startswith("data:") else f"data:image/png;base64,{image_b64}"
         response = requests.post(
-            NVIDIA_VISION_URL,
+            api_url,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Accept": "application/json"
             },
             json={
-                "model": NVIDIA_VISION_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{image_b64}"
+                "model": NVIDIA_VISION_MODEL or DEFAULT_NVIDIA_VISION_MODEL,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a webpage screenshot analyzer. Respond directly in the required format without lengthy chain-of-thought."
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": img_url
+                                }
                             }
-                        }
-                    ]
-                }],
-                "max_tokens": 512,
+                        ]
+                    }
+                ],
+                "max_tokens": 1024,
                 "temperature": 0.20,
                 "top_p": 0.70,
                 "frequency_penalty": 0.00,
                 "presence_penalty": 0.00,
                 "stream": False
             },
-            timeout=VISUAL_TIMEOUT
+            timeout=(3, VISUAL_TIMEOUT)
         )
         
         if response.status_code == 429:
@@ -115,6 +129,7 @@ def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
             return result
         
         if response.status_code != 200:
+            print(f"⚠️  [Vision] Failed with HTTP {response.status_code}: {response.text[:120]}", file=sys.stderr)
             result["findings"].append(f"Visual analysis failed (HTTP {response.status_code})")
             return result
         
@@ -126,7 +141,10 @@ def analyze_visual(image_b64: str, hostname: str = "") -> Dict[str, Any]:
             return result
         
         message = choices[0].get("message", {})
-        llm_response = message.get("content", "")
+        llm_response = message.get("content") or ""
+        
+        if not llm_response and message.get("reasoning_content"):
+            llm_response = message.get("reasoning_content", "")
         
         if not llm_response:
             result["findings"].append("Empty visual analysis response")

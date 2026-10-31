@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PhishPolice",
-  "version": "2.0.0",
-  "description": "AI-Powered Phishing Protection. Scan any webpage for threats in seconds.",
+  "version": "2.2.0",
+  "description": "AI-powered phishing protection. Scans pages and flags dangerous links before you click.",
   "permissions": [
     "scripting",
     "tabs",
@@ -32,13 +32,14 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["link_scanner.js"],
+      "css": ["link_scanner.css"],
       "run_at": "document_idle"
     }
   ],

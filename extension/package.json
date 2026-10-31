@@ -1,0 +1,25 @@
+{
+  "name": "phishpolice-extension-tests",
+  "private": true,
+  "description": "Jest test suite for PhishPolice extension scripts",
+  "scripts": {
+    "test": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "coverageDirectory": "coverage",
+    "collectCoverageFrom": ["link_scanner.js"],
+    "coverageThreshold": {
+      "global": {
+        "functions": 80,
+        "lines": 70
+      }
+    }
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
+

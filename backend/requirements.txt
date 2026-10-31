@@ -5,3 +5,5 @@ requests
 tldextract
 python-dotenv
 python-whois
+gunicorn
+pytest

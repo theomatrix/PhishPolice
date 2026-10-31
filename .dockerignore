@@ -1,0 +1,28 @@
+# ── PhishPolice .dockerignore ──────────────────────────────────
+# Exclude files that don't belong in the backend Docker image
+
+# Python local venv
+backend/myphish/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/tests/
+
+# Editor & OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.github/
+
+# Extension source (not needed in backend image)
+extension/
+
+# Docs & scripts
+*.md
+*.html
+*.txt
+!backend/requirements.txt
+

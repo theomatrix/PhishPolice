@@ -130,7 +130,8 @@ def analyze():
         try:
             visual_info = analyze_visual(image_b64, hostname)
             visual_risk, visual_evidence = get_visual_risk_score(visual_info)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️  [API] LLM analysis exception: {e}", file=sys.stderr)
             visual_info = {
                 "analyzed": False,
                 "detected_brand": None,
@@ -163,7 +164,8 @@ def analyze():
                 suspicious_patterns=suspicious_patterns,
                 dom_analysis=dom_analysis
             )
-        except Exception:
+        except Exception as e:
+            print(f"⚠️  [API] LLM analysis exception: {e}", file=sys.stderr)
             llm_analysis = {
                 "summary": "AI analysis unavailable",
                 "risk_factors": [],
@@ -218,7 +220,8 @@ def analyze():
             "llm_analysis": {
                 "summary": llm_analysis.get("summary", "Analysis unavailable"),
                 "risk_factors": llm_analysis.get("risk_factors", []),
-                "recommendation": llm_analysis.get("recommendation", "")
+                "recommendation": llm_analysis.get("recommendation", ""),
+                "model": llm_analysis.get("model", "GLM 5.3 Flash")
             }
         }
         
@@ -383,8 +386,14 @@ def health():
     })
 
 if __name__ == "__main__":
-    DEBUG = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
     HOST = "127.0.0.1"
-    print(f"🛡️ PhishPolice Backend v2.2 starting on {HOST}:5000", file=sys.stderr)
-    print(f"   Features: Typosquat, Domain Age, CT Monitor, Visual Analysis, NVIDIA AI", file=sys.stderr)
+    from utils.llm_proxy import NVIDIA_API_KEY, NVIDIA_MODEL
+    key_configured = bool(NVIDIA_API_KEY or os.environ.get("NVIDIA_API_KEY", "").strip())
+    print(f"🛡️ PhishPolice Backend v2.3 starting on {HOST}:5000", file=sys.stderr)
+    if key_configured:
+        print(f"   AI Engine: NVIDIA NIM ({NVIDIA_MODEL})", file=sys.stderr)
+    else:
+        print(f"   AI Engine: None configured (core security checks active)", file=sys.stderr)
+    print(f"   Features: Typosquat, Domain Age, CT Monitor, Visual Analysis", file=sys.stderr)
     app.run(host=HOST, port=5000, debug=DEBUG)

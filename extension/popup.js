@@ -1,622 +1,899 @@
-// popup.js - PhishPolice Popup UI Controller
+// popup.js – PhishPolice Popup UI Controller
+// Drives the redesigned popup.html (Scan, Trusted Sites, History, Report)
 
-const MAX_HISTORY_ITEMS = 10;
-let IS_SCANNING = false; // Lock to prevent duplicate scans
+'use strict';
 
+/* ─── helpers & icons ─────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+const ICON = {
+  ok:   '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,6 5,9 10,3"/></svg>',
+  warn: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="3" x2="6" y2="7"/><circle cx="6" cy="9.5" r=".8" fill="currentColor" stroke="none"/></svg>',
+  bad:  '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5"/></svg>',
+  x:    '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m3 3 8 8M11 3l-8 8"/></svg>'
+};
+
+const SHARED_HOSTS = [
+  "github.io", "sites.google.com", "blogspot.com", "wixsite.com",
+  "netlify.app", "vercel.app", "pages.dev", "notion.site", "herokuapp.com",
+  "glitch.me", "replit.dev", "codepen.io", "stackblitz.io", "web.app"
+];
+const isShared = d => SHARED_HOSTS.some(s => d === s || d.endsWith("." + s));
+
+const MAX_HISTORY = 10;
+let IS_SCANNING = false;
+
+let trustedList = []; // [{ d: "github.com", on: "Oct 12" }]
+let currentTabHostname = '';
+let currentTabUrl = '';
+let currentAnalysis = null;
+let toastTimer = null;
+let toastUndoAction = null;
+
+/* ─── boot ────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-  initializePopup();
-  setupEventListeners();
-  setupTabs();
+  initPopup();
+  wireStaticButtons();
 });
 
-/**
- * Initialize the popup with stored analysis data
- * Only shows previous analysis if it's for the current tab
- */
-async function initializePopup() {
+async function initPopup() {
   try {
-    // Get current tab URL
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const currentUrl = tab?.url || '';
-    const currentHostname = currentUrl ? new URL(currentUrl).hostname : '';
+    currentTabUrl  = tab?.url || '';
+    try { currentTabHostname = currentTabUrl ? new URL(currentTabUrl).hostname.toLowerCase() : ''; } catch (_) {}
 
-    const data = await chrome.storage.local.get(['lastAnalysis', 'scanHistory']);
+    // Load trusted sites first
+    await loadTrustedSites();
+
+    const data     = await chrome.storage.local.get(['lastAnalysis', 'scanHistory']);
     const analysis = data.lastAnalysis;
+    currentAnalysis = analysis;
 
-    // Only show previous analysis if it matches current page
-    if (analysis && analysis.hostname === currentHostname) {
-      displayAnalysisResult(analysis);
+    if (isSiteTrusted(currentTabHostname)) {
+      showTrustedState(currentTabHostname);
+    } else if (analysis && analysis.hostname === currentTabHostname) {
+      displayResult(analysis);
     } else {
-      // Show fresh "Ready to scan" state for new pages
-      showNoAnalysis();
+      showReady(currentTabHostname, currentTabUrl);
     }
 
-    // Load scan history
-    loadScanHistory(data.scanHistory || []);
-  } catch (error) {
-    console.error('Failed to load analysis:', error);
-    showNoAnalysis();
+    renderHistory(data.scanHistory || []);
+    renderTrustedRows();
+  } catch (err) {
+    console.error('[PhishPolice] init error', err);
+    showReady('', '');
   }
 }
 
-/**
- * Set up tab navigation
- */
-function setupTabs() {
-  const tabBtns = document.querySelectorAll('.tab-btn');
-  const tabContents = document.querySelectorAll('.tab-content');
+/* ─── tab switching ───────────────────────────────────────────── */
+function switchTab(tab) {
+  // tab: 'scan' | 'trust' | 'hist'
+  ['scan', 'trust', 'hist'].forEach(t => {
+    const btn = $(`t-${t}`);
+    if (btn) btn.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+  });
+  $('scan').hidden    = tab !== 'scan';
+  $('v-trust').hidden = tab !== 'trust';
+  $('hist').hidden    = tab !== 'hist';
+}
 
-  tabBtns.forEach(btn => {
+/* ─── static button wiring ────────────────────────────────────── */
+function wireStaticButtons() {
+  $('t-scan').addEventListener('click',  () => switchTab('scan'));
+  $('t-hist').addEventListener('click',  () => switchTab('hist'));
+  $('t-trust').addEventListener('click', () => switchTab('trust'));
+
+  $('rescan').addEventListener('click', triggerRescan);
+
+  $('report').addEventListener('click', openReportSheet);
+  $('rep-cancel').addEventListener('click', closeReportSheet);
+  $('rep-close').addEventListener('click',  closeReportSheet);
+
+  // Trust toggle on Scan tab
+  $('trust-toggle')?.addEventListener('click', () => {
+    const targetDomain = cleanDomain(currentTabHostname);
+    if (!targetDomain) return;
+    if (isSiteTrusted(currentTabHostname)) {
+      removeTrustedSite(targetDomain);
+    } else {
+      addTrustedSite(targetDomain);
+    }
+  });
+
+  // Add site form on Trusted tab
+  $('trust-form')?.addEventListener('submit', handleTrustFormSubmit);
+  $('trust-inp')?.addEventListener('input', () => {
+    $('trust-inp').removeAttribute('aria-invalid');
+    $('trust-msg').textContent = '';
+    $('trust-msg').className = '';
+  });
+
+  // Undo button on Toast
+  $('undo')?.addEventListener('click', () => {
+    if (toastUndoAction) {
+      toastUndoAction();
+      toastUndoAction = null;
+    }
+    $('toast')?.classList.remove('show');
+  });
+
+  // Chip toggle in Report sheet
+  $('chips').addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const pressed = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', pressed ? 'false' : 'true');
+    const anySelected = [...$('chips').querySelectorAll('button')]
+      .some(b => b.getAttribute('aria-pressed') === 'true');
+    $('rep-send').disabled = !anySelected;
+  });
+
+  $('rep-send').addEventListener('click', sendReport);
+
+  // Close sheet by clicking the backdrop
+  $('sheet').addEventListener('click', e => {
+    if (e.target === $('sheet')) closeReportSheet();
+  });
+}
+
+/* ─── trusted sites logic ─────────────────────────────────────── */
+async function loadTrustedSites() {
+  try {
+    let list = null;
+    try {
+      const syncData = await chrome.storage.sync.get('trustedSites');
+      list = syncData.trustedSites;
+    } catch (_) {}
+
+    if (!list) {
+      const localData = await chrome.storage.local.get('trustedSites');
+      list = localData.trustedSites;
+    }
+
+    if (Array.isArray(list)) {
+      trustedList = list.map(item => typeof item === 'string' ? { d: item, on: 'Earlier' } : item);
+    } else {
+      trustedList = [];
+    }
+  } catch (err) {
+    console.warn('[PhishPolice] Could not load trusted sites', err);
+    trustedList = [];
+  }
+}
+
+async function saveTrustedSites() {
+  try {
+    await chrome.storage.sync.set({ trustedSites: trustedList });
+  } catch (_) {}
+  try {
+    await chrome.storage.local.set({ trustedSites: trustedList });
+  } catch (_) {}
+}
+
+function cleanDomain(input) {
+  if (!input) return '';
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .split(/[\/?#]/)[0]
+    .replace(/^www\./, '');
+}
+
+function isSiteTrusted(hostname) {
+  if (!hostname) return false;
+  const host = hostname.toLowerCase();
+  return trustedList.some(item => {
+    const d = item.d.toLowerCase();
+    if (isShared(d)) {
+      return host === d; // exact address only for shared hosts
+    }
+    return host === d || host.endsWith('.' + d);
+  });
+}
+
+function addTrustedSite(domain) {
+  const d = cleanDomain(domain);
+  if (!d) return;
+
+  const newItem = { d, on: "Today" };
+  trustedList.unshift(newItem);
+  saveTrustedSites();
+  updateTrustUI();
+
+  showToast(`${d} added to trusted sites`, () => {
+    trustedList = trustedList.filter(x => x.d !== d);
+    saveTrustedSites();
+    updateTrustUI();
+  });
+}
+
+function removeTrustedSite(domain) {
+  const d = cleanDomain(domain);
+  const idx = trustedList.findIndex(x => x.d === d);
+  if (idx === -1) return;
+  const removed = trustedList[idx];
+
+  trustedList.splice(idx, 1);
+  saveTrustedSites();
+  updateTrustUI();
+
+  showToast(`${d} removed`, () => {
+    trustedList.splice(idx, 0, removed);
+    saveTrustedSites();
+    updateTrustUI();
+  });
+}
+
+function handleTrustFormSubmit(e) {
+  e.preventDefault();
+  const inp = $('trust-inp');
+  const msg = $('trust-msg');
+  if (!inp) return;
+
+  const raw = inp.value;
+  const d = cleanDomain(raw);
+
+  const fail = errorMsg => {
+    inp.setAttribute('aria-invalid', 'true');
+    msg.textContent = errorMsg;
+    msg.style.color = 'var(--bad)';
+  };
+
+  if (!d) return fail("Enter the site’s address.");
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d)) return fail("That doesn’t look like a web address.");
+  if (trustedList.some(x => x.d === d)) return fail(`${d} is already trusted.`);
+
+  inp.removeAttribute('aria-invalid');
+  inp.value = '';
+  msg.textContent = isShared(d)
+    ? `Anyone can publish pages on ${d}, so only this exact address is trusted.`
+    : '';
+  msg.style.color = 'var(--muted)';
+
+  addTrustedSite(d);
+}
+
+function renderTrustedRows() {
+  const countEl = $('trust-count');
+  if (countEl) countEl.textContent = trustedList.length ? String(trustedList.length) : '';
+
+  const ul = $('trust-rows');
+  if (!ul) return;
+
+  if (trustedList.length === 0) {
+    ul.innerHTML = `<li class="empty" style="padding:26px 8px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5;list-style:none">No trusted sites yet. Add the ones you use every day so they skip the scan.</li>`;
+    return;
+  }
+
+  ul.innerHTML = trustedList.map(x => `
+    <li class="trust-row">
+      <span class="trust-fav" aria-hidden="true">${escHtml(x.d[0] || '?')}</span>
+      <div style="flex:1;min-width:0">
+        <b>${escHtml(x.d)}${isShared(x.d) ? '<span class="exact-tag">Exact address only</span>' : ''}</b>
+        <small>Added ${escHtml(x.on)}</small>
+      </div>
+      <button class="rm-btn" data-d="${escHtml(x.d)}" aria-label="Remove ${escHtml(x.d)}">${ICON.x}</button>
+    </li>
+  `).join('');
+
+  ul.querySelectorAll('.rm-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const tabId = btn.dataset.tab;
-
-      // Update active states
-      tabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      tabContents.forEach(content => {
-        content.classList.remove('active');
-        if (content.id === `${tabId}Tab`) {
-          content.classList.add('active');
-        }
-      });
+      const d = btn.getAttribute('data-d');
+      if (d) removeTrustedSite(d);
     });
   });
 }
 
-/**
- * Set up event listeners for buttons
- */
-function setupEventListeners() {
-  document.getElementById('rescanBtn').addEventListener('click', async () => {
-    await triggerRescan();
-  });
+function updateTrustUI() {
+  renderTrustedRows();
 
-  document.getElementById('reportBtn').addEventListener('click', async () => {
-    try {
-      const data = await chrome.storage.local.get(['lastAnalysis']);
-      const analysis = data.lastAnalysis;
-
-      if (analysis?.url) {
-        const reportUrl = `https://safebrowsing.google.com/safebrowsing/report_phish/?url=${encodeURIComponent(analysis.url)}`;
-        chrome.tabs.create({ url: reportUrl });
-      } else {
-        showToast('No URL to report', 'error');
-      }
-    } catch (error) {
-      console.error('Report failed:', error);
-      showToast('Failed to open report page', 'error');
-    }
-  });
-
-  // Clear history button
-  document.getElementById('clearHistoryBtn')?.addEventListener('click', async () => {
-    await chrome.storage.local.set({ scanHistory: [] });
-    loadScanHistory([]);
-    showToast('History cleared', 'success');
-  });
+  if (isSiteTrusted(currentTabHostname)) {
+    showTrustedState(currentTabHostname);
+  } else if (currentAnalysis && currentAnalysis.hostname === currentTabHostname) {
+    displayResult(currentAnalysis);
+  } else {
+    showReady(currentTabHostname, currentTabUrl);
+  }
 }
 
-/**
- * Load and display scan history
- */
-function loadScanHistory(history) {
-  const historyList = document.getElementById('historyList');
-  const emptyHistory = document.getElementById('emptyHistory');
+/* ─── trusted neutral state in scan tab ───────────────────────── */
+function showTrustedState(hostname) {
+  stopScanning();
+  applyVerdictTheme('muted');
 
-  if (!history || history.length === 0) {
-    historyList.style.display = 'none';
-    emptyHistory.style.display = 'flex';
+  const card = $('verdict-card');
+  if (card) {
+    card.className = 'verdict trusted';
+  }
+
+  $('word').textContent = 'Trusted';
+  $('sub').textContent  = 'You added this site, so PhishPolice skipped the scan.';
+  $('host').textContent = hostname || '—';
+  $('path').textContent = '';
+
+  $('meter').hidden        = true;
+  $('trust-checks').hidden = false;
+  $('trust-why-host').textContent = `Other sites that link to ${hostname || 'this site'} aren’t trusted.`;
+
+  $('aicard').hidden       = true;
+  $('checks').hidden       = true;
+  $('scan-actions').hidden = true;
+
+  const toggle = $('trust-toggle');
+  if (toggle) {
+    toggle.textContent = 'Remove from trusted';
+    toggle.className = 'btn';
+  }
+}
+
+/* ─── ready / no-analysis state ──────────────────────────────── */
+function showReady(hostname, url) {
+  if (isSiteTrusted(hostname)) {
+    showTrustedState(hostname);
     return;
   }
 
-  historyList.style.display = 'block';
-  emptyHistory.style.display = 'none';
-  historyList.innerHTML = '';
+  stopScanning();
+  applyVerdictTheme('muted');
 
-  // Sort by timestamp descending
-  const sortedHistory = [...history].sort((a, b) => b.timestamp - a.timestamp);
+  const card = $('verdict-card');
+  if (card) card.className = 'verdict';
 
-  sortedHistory.forEach((item, index) => {
-    const historyItem = createHistoryItem(item, index);
-    historyList.appendChild(historyItem);
-  });
+  $('word').textContent = 'Scan a page';
+  $('sub').textContent  = 'Click "Scan again" to analyse this site.';
+  $('host').textContent = hostname || '—';
+  $('path').textContent = '';
+  $('score').textContent = '';
+  $('pin').style.left = '8%';
+
+  $('meter').hidden        = false;
+  $('trust-checks').hidden = true;
+  $('aicard').hidden       = false;
+  $('checks').hidden       = false;
+  $('scan-actions').hidden = false;
+
+  $('aicard').className = 'ai-card pending';
+  $('aicard').innerHTML = buildAiCardPending('Ready to scan.');
+  $('checks').innerHTML = '';
+
+  const toggle = $('trust-toggle');
+  if (toggle) {
+    toggle.textContent = 'Trust this site';
+    toggle.className = 'btn';
+  }
 }
 
-/**
- * Create a history item element
- */
-function createHistoryItem(item, index) {
-  const div = document.createElement('div');
-  div.className = 'history-item';
-  div.dataset.index = index;
+/* ─── scanning state ──────────────────────────────────────────── */
+function showScanning() {
+  applyVerdictTheme('muted');
+  const verdict = document.querySelector('.verdict');
+  verdict?.classList.add('scanning');
 
-  const verdictClass = item.verdict || 'unknown';
-  const verdictIcon = {
-    safe: '✓',
-    suspicious: '⚠',
-    phish: '✕',
-    error: '!'
-  }[verdictClass] || '?';
+  $('word').textContent  = 'Scanning…';
+  $('sub').textContent   = 'Checking SSL, domain age, typosquatting…';
+  $('score').textContent = '';
+  $('pin').style.left    = '50%';
 
-  const hostname = item.hostname || new URL(item.url || 'https://unknown').hostname;
-  const time = formatTime(new Date(item.timestamp));
-  const score = Math.round((item.score || 0) * 100);
+  $('meter').hidden        = false;
+  $('trust-checks').hidden = true;
+  $('aicard').hidden       = false;
+  $('checks').hidden       = false;
+  $('scan-actions').hidden = false;
 
-  div.innerHTML = `
-    <div class="history-verdict ${verdictClass}">
-      <span>${verdictIcon}</span>
+  $('aicard').className = 'ai-card pending';
+  $('aicard').innerHTML = buildAiCardPending('AI analysis in progress…');
+
+  $('checks').innerHTML = '';
+}
+
+function stopScanning() {
+  document.querySelector('.verdict')?.classList.remove('scanning');
+}
+
+/* ─── display result ──────────────────────────────────────────── */
+function displayResult(analysis) {
+  if (isSiteTrusted(analysis.hostname || currentTabHostname)) {
+    showTrustedState(analysis.hostname || currentTabHostname);
+    return;
+  }
+
+  stopScanning();
+
+  const verdict = analysis.verdict || 'safe'; // 'safe' | 'suspicious' | 'phish'
+  const colorKey = verdictToColor(verdict);
+
+  applyVerdictTheme(colorKey);
+
+  const card = $('verdict-card');
+  if (card) card.className = 'verdict';
+
+  // Verdict words
+  const WORDS = { safe: 'Looks safe', suspicious: 'Be careful', phish: 'Likely phishing' };
+  const SUBS  = {
+    safe:       'No significant threats detected.',
+    suspicious: 'Some signals look risky. Proceed with caution.',
+    phish:      'High probability this page is a phishing site.'
+  };
+  $('word').textContent = WORDS[verdict] || 'Unknown';
+  $('sub').textContent  = SUBS[verdict]  || '';
+
+  // Host + path
+  try {
+    const u = new URL(analysis.url || `https://${analysis.hostname}`);
+    $('host').textContent = u.hostname;
+    $('path').textContent = u.pathname !== '/' ? u.pathname.slice(0, 40) : '';
+  } catch (_) {
+    $('host').textContent = analysis.hostname || '—';
+    $('path').textContent = '';
+  }
+
+  // Score needle
+  $('meter').hidden        = false;
+  $('trust-checks').hidden = true;
+  $('aicard').hidden       = false;
+  $('checks').hidden       = false;
+  $('scan-actions').hidden = false;
+
+  const score = Math.min(Math.max(analysis.score || 0, 0), 0.99);
+  const pct   = Math.round(score * 100);
+  const pinPct = Math.round(pct * 0.84 + 8); // map 0-100 → 8-92%
+  $('pin').style.left    = `${pinPct}%`;
+  $('score').textContent = `Risk ${pct}/100`;
+
+  // AI card
+  renderAiCard(analysis, colorKey);
+
+  // Checks / evidence
+  renderChecks(analysis);
+
+  // Trust button state
+  const toggle = $('trust-toggle');
+  if (toggle) {
+    toggle.textContent = 'Trust this site';
+    toggle.className = 'btn';
+  }
+}
+
+/* ─── verdict → CSS color key ────────────────────────────────── */
+function verdictToColor(verdict) {
+  return { safe: 'safe', suspicious: 'warn', phish: 'bad' }[verdict] || 'muted';
+}
+
+/* ─── apply CSS variable theme ───────────────────────────────── */
+function applyVerdictTheme(colorKey) {
+  const r = document.documentElement;
+  if (colorKey === 'safe') {
+    r.style.setProperty('--verdict',    'var(--safe)');
+    r.style.setProperty('--verdict-bg', 'var(--safe-bg)');
+  } else if (colorKey === 'warn') {
+    r.style.setProperty('--verdict',    'var(--warn)');
+    r.style.setProperty('--verdict-bg', 'var(--warn-bg)');
+  } else if (colorKey === 'bad') {
+    r.style.setProperty('--verdict',    'var(--bad)');
+    r.style.setProperty('--verdict-bg', 'var(--bad-bg)');
+  } else {
+    // muted (ready / scanning / trusted)
+    r.style.setProperty('--verdict',    'var(--muted)');
+    r.style.setProperty('--verdict-bg', 'var(--bg)');
+  }
+}
+
+/* ─── AI card ─────────────────────────────────────────────────── */
+function buildAiCardPending(msg) {
+  return `
+    <div class="ai-h">
+      <span>GLM 5.3 Flash</span>
+      <em>AI analysis</em>
     </div>
-    <div class="history-info">
-      <div class="history-hostname">${escapeHtml(hostname)}</div>
-      <div class="history-meta">
-        <span class="history-score">${score}% risk</span>
-        <span class="history-time">${time}</span>
+    <p class="ai-p">${escHtml(msg)}</p>`;
+}
+
+function renderAiCard(analysis, colorKey) {
+  const llm = analysis.llm_analysis || {};
+  const modelName = llm.model || 'GLM 5.3 Flash';
+  const summary    = llm.summary        || 'AI analysis unavailable.';
+  const recommendation = llm.recommendation || '';
+  const factors   = Array.isArray(llm.risk_factors) ? llm.risk_factors : [];
+
+  $('aicard').className = `ai-card ${colorKey}`;
+  $('aicard').innerHTML = `
+    <div class="ai-h">
+      <span>${escHtml(modelName)}</span>
+      <em>AI analysis</em>
+    </div>
+    <p class="ai-p">${escHtml(summary)}</p>
+    ${recommendation ? `<p class="ai-f"><span>${escHtml(recommendation)}</span></p>` : ''}
+    ${factors.length ? `<div class="ai-f"><span>Risk factors</span><strong>${escHtml(factors.slice(0,3).join(', '))}</strong></div>` : ''}`;
+}
+
+/* ─── checks / evidence list ──────────────────────────────────── */
+function renderChecks(analysis) {
+  const ul = $('checks');
+  ul.innerHTML = '';
+
+  const rows = buildCheckRows(analysis);
+  rows.forEach(({ label, detail, type }) => {
+    const li = document.createElement('li');
+    li.className = 'done';
+    li.innerHTML = `
+      <div class="dot ${type}">${ICON[type]}</div>
+      <div><h3>${escHtml(label)}</h3>${detail ? `<p>${escHtml(detail)}</p>` : ''}</div>`;
+    ul.appendChild(li);
+  });
+
+  // Evidence strings from backend (additional rows)
+  if (Array.isArray(analysis.evidence)) {
+    analysis.evidence.forEach(ev => {
+      const type = evidenceType(ev);
+      const li = document.createElement('li');
+      li.className = 'done';
+      li.innerHTML = `
+        <div class="dot ${type}">${ICON[type]}</div>
+        <div><p>${escHtml(stripEmoji(ev))}</p></div>`;
+      ul.appendChild(li);
+    });
+  }
+}
+
+function buildCheckRows(analysis) {
+  const rows = [];
+  const ssl  = analysis.ssl_info    || {};
+  const dom  = analysis.domain_info || {};
+  const ct   = analysis.ct_info     || {};
+  const vis  = analysis.visual_info || {};
+
+  // SSL
+  if (ssl.has_ssl !== undefined) {
+    if (!ssl.has_ssl) {
+      rows.push({ label: 'No HTTPS', detail: 'Connection is not encrypted.', type: 'bad' });
+    } else if (!ssl.is_valid) {
+      rows.push({ label: 'Invalid SSL certificate', detail: ssl.issuer || '', type: 'bad' });
+    } else {
+      const days = ssl.expires_in_days;
+      if (days !== undefined && days < 14) {
+        rows.push({ label: `SSL expires in ${days} days`, detail: ssl.issuer || '', type: 'warn' });
+      } else {
+        rows.push({ label: 'Valid SSL certificate', detail: ssl.issuer ? `Issued by ${ssl.issuer}` : '', type: 'ok' });
+      }
+    }
+  }
+
+  // Domain age
+  if (dom.age_days !== undefined && dom.age_days !== null) {
+    const age = dom.age_days;
+    if (age < 30) {
+      rows.push({ label: `Domain is ${age} days old`, detail: 'Very new domain — high risk.', type: 'bad' });
+    } else if (age < 180) {
+      rows.push({ label: `Domain is ${age} days old`, detail: 'Relatively new.', type: 'warn' });
+    } else {
+      const yrs = (age / 365).toFixed(1);
+      rows.push({ label: `Domain age: ${yrs} years`, detail: '', type: 'ok' });
+    }
+  }
+
+  // Typosquat
+  if (dom.is_typosquat) {
+    rows.push({ label: `Typosquat detected`, detail: `Mimics "${dom.suspected_brand}"`, type: 'bad' });
+  }
+
+  // CT
+  if (ct.warning) {
+    rows.push({ label: 'Certificate transparency', detail: ct.warning, type: 'warn' });
+  } else if (ct.checked && ct.certs_found > 0) {
+    rows.push({ label: 'Certificate transparency OK', detail: `${ct.certs_found} cert(s) found`, type: 'ok' });
+  }
+
+  // Visual analysis
+  if (vis.analyzed) {
+    if (vis.is_login_page && vis.detected_brand) {
+      rows.push({ label: `Fake login page`, detail: `Impersonates ${vis.detected_brand}`, type: 'bad' });
+    } else if (vis.has_urgency) {
+      rows.push({ label: 'Urgency language detected', detail: 'Page uses pressure tactics.', type: 'warn' });
+    } else if (vis.detected_brand) {
+      rows.push({ label: `Brand detected: ${vis.detected_brand}`, detail: '', type: 'warn' });
+    }
+  }
+
+  return rows;
+}
+
+function evidenceType(ev) {
+  const s = ev || '';
+  if (/🚨|❌/.test(s) || /danger|phish|block|fake/i.test(s)) return 'bad';
+  if (/⚠️?|⚠/.test(s) || /warn|suspicious|risk|caution/i.test(s)) return 'warn';
+  return 'ok';
+}
+
+function stripEmoji(s) {
+  return s.replace(/[\u{1F300}-\u{1FFFF}]|[\u2600-\u27BF]|✅|❌|⚠️?|🚨|✓|✗/gu, '').trim();
+}
+
+/* ─── history ─────────────────────────────────────────────────── */
+function renderHistory(history) {
+  const ul = $('hist');
+  ul.innerHTML = '';
+
+  if (!history || history.length === 0) {
+    const li = document.createElement('li');
+    li.style.cssText = 'justify-content:center;color:var(--muted);padding:40px 0;font-size:14px';
+    li.textContent = 'No scans yet.';
+    ul.appendChild(li);
+    return;
+  }
+
+  const sorted = [...history].sort((a, b) => b.timestamp - a.timestamp);
+  sorted.forEach(item => {
+    const ck   = verdictToColor(item.verdict || 'safe');
+    const pct  = Math.round((item.score || 0) * 100);
+    const time = fmtTime(new Date(item.timestamp));
+    const li   = document.createElement('li');
+    li.innerHTML = `
+      <div class="dot ${ck}">${ICON[ck] || ICON.ok}</div>
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(item.hostname || '—')}</div>
+        <small>${escHtml(time)}</small>
       </div>
-    </div>
-    <div class="history-arrow">›</div>
-  `;
-
-  div.addEventListener('click', () => {
-    displayAnalysisResult(item);
-    // Switch to scan tab
-    document.querySelector('[data-tab="scan"]').click();
+      <span class="sc" style="color:var(--${ck})">${pct}</span>`;
+    li.style.cursor = 'pointer';
+    li.addEventListener('click', () => {
+      displayResult(item);
+      switchTab('scan');
+    });
+    ul.appendChild(li);
   });
-
-  return div;
 }
 
-/**
- * Save scan to history
- */
 async function saveToHistory(analysis) {
   try {
     const data = await chrome.storage.local.get(['scanHistory']);
     let history = data.scanHistory || [];
-
-    // Add new scan at the beginning
-    const historyItem = {
-      url: analysis.url,
-      hostname: analysis.hostname,
-      verdict: analysis.verdict,
-      score: analysis.score,
-      timestamp: analysis.timestamp || Date.now()
-    };
-
-    // Remove duplicate URLs (keep only latest)
     history = history.filter(h => h.url !== analysis.url);
-
-    // Add to front
-    history.unshift(historyItem);
-
-    // Limit to max items
-    if (history.length > MAX_HISTORY_ITEMS) {
-      history = history.slice(0, MAX_HISTORY_ITEMS);
-    }
-
+    history.unshift({
+      url:       analysis.url,
+      hostname:  analysis.hostname,
+      verdict:   analysis.verdict,
+      score:     analysis.score,
+      timestamp: analysis.timestamp || Date.now()
+    });
+    if (history.length > MAX_HISTORY) history = history.slice(0, MAX_HISTORY);
     await chrome.storage.local.set({ scanHistory: history });
-    loadScanHistory(history);
-  } catch (error) {
-    console.error('Failed to save history:', error);
+    renderHistory(history);
+  } catch (err) {
+    console.error('[PhishPolice] saveToHistory', err);
   }
 }
 
-/**
- * Trigger a rescan of the current page
- */
+/* ─── scan ────────────────────────────────────────────────────── */
 async function triggerRescan() {
-  // Prevent duplicate scans
-  if (IS_SCANNING) {
-    console.log('[PhishPolice] Scan already in progress, ignoring duplicate request');
-    return;
-  }
-
+  if (IS_SCANNING) return;
   IS_SCANNING = true;
-  const rescanBtn = document.getElementById('rescanBtn');
-  const originalContent = rescanBtn.innerHTML;
+  $('rescan').disabled = true;
+  $('rescan').textContent = 'Scanning…';
+
+  showScanning();
 
   try {
-    rescanBtn.disabled = true;
-    rescanBtn.innerHTML = '<span class="btn-spinner"></span> Scanning...';
-    showScanningState();
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) {
-      throw new Error('No active tab found');
-    }
+    if (!tab?.id) throw new Error('No active tab found.');
 
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: extractPageFeaturesInline
     });
-
-    if (!results || !results[0]?.result) {
-      throw new Error('Failed to extract page features');
-    }
+    if (!results?.[0]?.result) throw new Error('Failed to extract page features.');
 
     const features = results[0].result;
 
-    let imageData = "";
+    let imageData = '';
     try {
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      imageData = dataUrl.split(",")[1] || "";
-    } catch (e) {
-      console.warn("Screenshot capture failed:", e);
-    }
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+      imageData = dataUrl.split(',')[1] || '';
+    } catch (_) {}
 
     const payload = {
-      url: features.url?.slice(0, 2048) || "",
-      hostname: features.hostname?.slice(0, 255) || "",
-      title: features.title?.slice(0, 500) || "",
-      forms: Array.isArray(features.forms) ? features.forms.slice(0, 100) : [],
-      dom_signature: features.dom_signature?.slice(0, 5000) || "",
+      url:                features.url?.slice(0, 2048)   || '',
+      hostname:           features.hostname?.slice(0, 255) || '',
+      title:              features.title?.slice(0, 500)   || '',
+      forms:              Array.isArray(features.forms) ? features.forms.slice(0, 100) : [],
+      dom_signature:      features.dom_signature?.slice(0, 5000) || '',
       suspiciousPatterns: features.suspiciousPatterns || [],
-      externalLinks: features.externalLinks || {},
-      image_b64: imageData
+      externalLinks:      features.externalLinks || {},
+      image_b64:          imageData
     };
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s for visual analysis
+    const tid = setTimeout(() => controller.abort(), 45_000);
 
-    const resp = await fetch("http://127.0.0.1:5000/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal
+    const resp = await fetch('http://127.0.0.1:5000/api/analyze', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+      signal:  controller.signal
     });
-
-    clearTimeout(timeoutId);
+    clearTimeout(tid);
 
     if (!resp.ok) {
-      const errorData = await resp.json().catch(() => ({}));
-      throw new Error(errorData.error || `Server error: ${resp.status}`);
+      const e = await resp.json().catch(() => ({}));
+      throw new Error(e.error || `Server error ${resp.status}`);
     }
 
     const result = await resp.json();
-    console.log('[PhishPolice] API response received:', result);
-
     const analysisData = {
       ...result,
-      url: features.url,
-      hostname: features.hostname,
+      url:       features.url,
+      hostname:  features.hostname,
       timestamp: Date.now()
     };
 
-    console.log('[PhishPolice] Saving and displaying analysis:', analysisData.verdict, analysisData.score);
-
+    currentAnalysis = analysisData;
     await chrome.storage.local.set({ lastAnalysis: analysisData });
-    displayAnalysisResult(analysisData);
+    displayResult(analysisData);
     await saveToHistory(analysisData);
-    showToast('Scan complete!', 'success');
+    showToast('Scan complete!', null, 'success');
 
-  } catch (error) {
-    console.error('Rescan failed:', error);
-
-    if (error.name === 'AbortError') {
-      showToast('Scan timed out. Is the backend running?', 'error');
-    } else {
-      showToast(error.message || 'Scan failed', 'error');
-    }
+  } catch (err) {
+    console.error('[PhishPolice] scan error', err);
+    const msg = err.name === 'AbortError'
+      ? 'Scan timed out. Is the backend running?'
+      : (err.message || 'Scan failed');
+    showToast(msg, null, 'error');
+    stopScanning();
 
     const data = await chrome.storage.local.get(['lastAnalysis']);
-    if (data.lastAnalysis) {
-      displayAnalysisResult(data.lastAnalysis);
-    } else {
-      showNoAnalysis();
-    }
-
+    if (data.lastAnalysis) displayResult(data.lastAnalysis);
+    else showReady(currentTabHostname, currentTabUrl);
   } finally {
-    IS_SCANNING = false; // Release scan lock
-    rescanBtn.disabled = false;
-    rescanBtn.innerHTML = originalContent;
+    IS_SCANNING = false;
+    $('rescan').disabled = false;
+    $('rescan').textContent = 'Scan again';
   }
 }
 
-/**
- * Inline function to extract page features
- */
+/* Inline page-feature extractor (runs in page context via scripting API) */
 function extractPageFeaturesInline() {
   const features = {
-    url: location.href,
-    hostname: location.hostname,
-    title: document.title || "",
-    forms: [],
-    dom_signature: "",
+    url:                location.href,
+    hostname:           location.hostname,
+    title:              document.title || '',
+    forms:              [],
+    dom_signature:      '',
     suspiciousPatterns: [],
-    externalLinks: { external: 0, total: 0 }
+    externalLinks:      { external: 0, total: 0 }
   };
 
-  // Extract form data
-  const forms = Array.from(document.forms);
-  features.forms = forms.slice(0, 100).map(form => {
-    const action = form.action || "";
-    let actionHostname = "";
-    try {
-      if (action && action.startsWith("http")) {
-        actionHostname = new URL(action).hostname;
-      }
-    } catch (e) { }
-
+  // Forms
+  features.forms = Array.from(document.forms).slice(0, 100).map(form => {
+    let actionHost = '';
+    try { if (form.action?.startsWith('http')) actionHost = new URL(form.action).hostname; } catch (_) {}
     return {
-      action: action.slice(0, 500),
-      actionHostname: actionHostname,
-      method: (form.method || "GET").toUpperCase(),
-      inputCount: form.querySelectorAll("input, textarea, select").length,
-      hasPassword: !!form.querySelector("input[type='password']"),
-      hasEmail: !!form.querySelector("input[type='email']"),
-      submitsToDifferentDomain: actionHostname && actionHostname !== location.hostname
+      action:                   (form.action || '').slice(0, 500),
+      actionHostname:           actionHost,
+      method:                   (form.method || 'GET').toUpperCase(),
+      inputCount:               form.querySelectorAll('input,textarea,select').length,
+      hasPassword:              !!form.querySelector("input[type='password']"),
+      hasEmail:                 !!form.querySelector("input[type='email']"),
+      submitsToDifferentDomain: !!(actionHost && actionHost !== location.hostname)
     };
   });
 
-  // Generate DOM signature
+  // DOM signature
   if (document.body) {
-    const elements = document.body.querySelectorAll("*");
+    const els  = document.body.querySelectorAll('*');
     const parts = [];
-    const limit = Math.min(elements.length, 200);
-    for (let i = 0; i < limit; i++) {
-      let sig = elements[i].nodeName;
-      if (elements[i].id) sig += `#${elements[i].id.slice(0, 50)}`;
-      if (elements[i].className && typeof elements[i].className === "string") {
-        const cls = elements[i].className.split(/\s+/).slice(0, 3).join(".");
+    const lim  = Math.min(els.length, 200);
+    for (let i = 0; i < lim; i++) {
+      let sig = els[i].nodeName;
+      if (els[i].id) sig += `#${els[i].id.slice(0, 50)}`;
+      if (els[i].className && typeof els[i].className === 'string') {
+        const cls = els[i].className.split(/\s+/).slice(0, 3).join('.');
         if (cls) sig += `.${cls.slice(0, 50)}`;
       }
       parts.push(sig);
     }
-    features.dom_signature = parts.join("|").slice(0, 2000);
+    features.dom_signature = parts.join('|').slice(0, 2000);
   }
 
-  // Detect suspicious patterns
-  const bodyText = document.body?.innerText?.toLowerCase() || "";
-  const urgencyPatterns = [
-    "account suspended", "verify immediately", "urgent action",
-    "your account will be closed", "unusual activity", "confirm your identity"
-  ];
-  urgencyPatterns.forEach(pattern => {
-    if (bodyText.includes(pattern)) {
-      features.suspiciousPatterns.push(`urgency: "${pattern}"`);
-    }
-  });
+  // Suspicious patterns
+  const bodyText = document.body?.innerText?.toLowerCase() || '';
+  ['account suspended','verify immediately','urgent action',
+   'your account will be closed','unusual activity','confirm your identity']
+    .forEach(p => { if (bodyText.includes(p)) features.suspiciousPatterns.push(`urgency: "${p}"`); });
 
-  // Hidden iframes
-  const hiddenIframes = document.querySelectorAll('iframe[style*="display:none"], iframe[width="0"]');
-  if (hiddenIframes.length > 0) {
-    features.suspiciousPatterns.push(`hidden_iframes: ${hiddenIframes.length}`);
-  }
+  const hiddenIframes = document.querySelectorAll('iframe[style*="display:none"],iframe[width="0"]');
+  if (hiddenIframes.length) features.suspiciousPatterns.push(`hidden_iframes: ${hiddenIframes.length}`);
 
   // External links
-  const links = document.querySelectorAll('a[href]');
-  links.forEach(link => {
+  document.querySelectorAll('a[href]').forEach(a => {
     features.externalLinks.total++;
     try {
-      const url = new URL(link.href);
-      if (url.hostname !== location.hostname) {
-        features.externalLinks.external++;
-      }
-    } catch (e) { }
+      if (new URL(a.href).hostname !== location.hostname) features.externalLinks.external++;
+    } catch (_) {}
   });
 
   return features;
 }
 
-/**
- * Show scanning state in UI
- */
-function showScanningState() {
-  document.getElementById('noAnalysis').style.display = 'none';
-  document.getElementById('analysisResult').style.display = 'block';
+/* ─── report sheet ────────────────────────────────────────────── */
+async function openReportSheet() {
+  $('rep-form').hidden = false;
+  $('rep-done').hidden = true;
+  $('rep-send').disabled = true;
+  $('rep-note').value = '';
+  $('chips').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', 'false'));
 
-  const verdictBadge = document.getElementById('verdictBadge');
-  verdictBadge.className = 'verdict-badge loading';
-  document.getElementById('verdictText').textContent = 'Analyzing...';
-  document.getElementById('verdictIcon').textContent = '○';
+  $('sheet').hidden = false;
+}
 
-  const progressCircle = document.getElementById('progressCircle');
-  progressCircle.style.stroke = '#6366f1';
-  progressCircle.style.strokeDashoffset = '377';
-  progressCircle.classList.add('scanning');
+function closeReportSheet() {
+  $('sheet').hidden = true;
+}
 
-  document.getElementById('scoreValue').textContent = '...';
-  document.getElementById('evidenceList').innerHTML = '<li class="evidence-item scanning-msg">🔍 Analyzing with AI...</li>';
+async function sendReport() {
+  const data = await chrome.storage.local.get(['lastAnalysis']);
+  const analysis = data.lastAnalysis;
 
-  const aiSummary = document.getElementById('aiSummary');
-  if (aiSummary) {
-    aiSummary.textContent = 'PhishPolice AI is analyzing this page...';
-    aiSummary.classList.add('loading');
+  const chips = [...$('chips').querySelectorAll('button[aria-pressed="true"]')]
+    .map(b => b.textContent);
+  const note = $('rep-note').value.trim();
+
+  if (analysis?.url) {
+    const reportUrl = `https://safebrowsing.google.com/safebrowsing/report_phish/?url=${encodeURIComponent(analysis.url)}`;
+    chrome.tabs.create({ url: reportUrl });
   }
-  const aiRecommendation = document.getElementById('aiRecommendation');
-  if (aiRecommendation) {
-    aiRecommendation.style.display = 'none';
+
+  $('rep-form').hidden = true;
+  $('rep-done').hidden = false;
+
+  const sum = $('rep-sum');
+  sum.innerHTML = '';
+  if (analysis?.hostname) {
+    sum.innerHTML += `<div><dt>Site</dt><dd>${escHtml(analysis.hostname)}</dd></div>`;
+  }
+  if (chips.length) {
+    sum.innerHTML += `<div><dt>Reasons</dt><dd>${escHtml(chips.join(', '))}</dd></div>`;
+  }
+  if (note) {
+    sum.innerHTML += `<div><dt>Note</dt><dd>${escHtml(note)}</dd></div>`;
   }
 }
 
-/**
- * Display analysis result in the UI
- */
-function displayAnalysisResult(analysis) {
-  document.getElementById('noAnalysis').style.display = 'none';
-  document.getElementById('analysisResult').style.display = 'block';
+/* ─── toast with undo ─────────────────────────────────────────── */
+function showToast(text, onUndo, type = 'info') {
+  const t = $('toast');
+  const msg = $('toast-t');
+  const undoBtn = $('undo');
+  if (!t || !msg) return;
 
-  const verdictBadge = document.getElementById('verdictBadge');
-  const verdictText = document.getElementById('verdictText');
-  const verdictIcon = document.getElementById('verdictIcon');
+  msg.textContent = text;
+  t.className = `toast show${type === 'error' ? ' toast-error' : type === 'success' ? ' toast-success' : ''}`;
 
-  const verdictConfig = {
-    safe: { text: 'Safe', icon: '✓', class: 'safe' },
-    suspicious: { text: 'Suspicious', icon: '⚠', class: 'suspicious' },
-    phish: { text: 'Phishing Risk', icon: '✕', class: 'phish' },
-    error: { text: 'Error', icon: '!', class: 'error' }
-  };
-
-  const config = verdictConfig[analysis.verdict] || verdictConfig.error;
-  verdictBadge.className = `verdict-badge ${config.class}`;
-  verdictText.textContent = config.text;
-  verdictIcon.textContent = config.icon;
-
-  const score = analysis.score || 0;
-  const scorePercent = Math.round(score * 100);
-  document.getElementById('scoreValue').textContent = `${scorePercent}%`;
-
-  const progressCircle = document.getElementById('progressCircle');
-  progressCircle.classList.remove('scanning');
-  const circumference = 2 * Math.PI * 60;
-  const offset = circumference - (score * circumference);
-
-  const colors = {
-    safe: '#00e5b0',
-    suspicious: '#ffc107',
-    phish: '#ff4d6a',
-    error: '#666'
-  };
-
-  progressCircle.style.stroke = colors[analysis.verdict] || colors.error;
-
-  setTimeout(() => {
-    progressCircle.style.strokeDashoffset = offset;
-  }, 100);
-
-  const urlDisplay = document.getElementById('urlDisplay');
-  urlDisplay.textContent = truncateUrl(analysis.url || analysis.hostname || '-');
-  urlDisplay.title = analysis.url || '';
-
-  // Update domain info display
-  const domainInfo = analysis.domain_info || {};
-  const domainInfoEl = document.getElementById('domainInfo');
-  if (domainInfoEl) {
-    let domainText = '';
-    if (domainInfo.age_days !== null && domainInfo.age_days !== undefined) {
-      const ageDays = domainInfo.age_days;
-      if (ageDays < 30) {
-        domainText = `🚨 Domain: ${ageDays} days old (NEW!)`;
-        domainInfoEl.className = 'domain-info danger';
-      } else if (ageDays < 90) {
-        domainText = `⚠️ Domain: ${ageDays} days old`;
-        domainInfoEl.className = 'domain-info warning';
-      } else if (ageDays < 365) {
-        domainText = `📅 Domain: ${ageDays} days old`;
-        domainInfoEl.className = 'domain-info neutral';
-      } else {
-        const years = Math.floor(ageDays / 365);
-        domainText = `✓ Domain: ${years}+ years old`;
-        domainInfoEl.className = 'domain-info safe';
-      }
-    } else {
-      domainText = '📅 Domain age: Unknown';
-      domainInfoEl.className = 'domain-info neutral';
-    }
-    if (domainInfo.is_typosquat) {
-      domainText = `🚨 Typosquat: Mimics ${domainInfo.suspected_brand}`;
-      domainInfoEl.className = 'domain-info danger';
-    }
-    domainInfoEl.textContent = domainText;
-    domainInfoEl.style.display = 'block';
-  }
-
-  const evidenceList = document.getElementById('evidenceList');
-  evidenceList.innerHTML = '';
-
-  if (analysis.evidence && Array.isArray(analysis.evidence)) {
-    analysis.evidence.forEach(item => {
-      const iconType = getEvidenceIconType(item, analysis.verdict);
-      const li = document.createElement('li');
-      li.className = 'evidence-item';
-      li.innerHTML = `
-        <span class="evidence-icon ${iconType}">${getEvidenceEmoji(iconType)}</span>
-        <span>${escapeHtml(item)}</span>
-      `;
-      evidenceList.appendChild(li);
-    });
-  }
-
-  updateAiAnalysis(analysis);
-
-  if (analysis.timestamp) {
-    const date = new Date(analysis.timestamp);
-    document.getElementById('timestamp').textContent = `Analyzed ${formatTime(date)}`;
-  }
-}
-
-/**
- * Update AI Analysis section with LLM results
- */
-function updateAiAnalysis(analysis) {
-  const aiSummary = document.getElementById('aiSummary');
-  const aiRecommendation = document.getElementById('aiRecommendation');
-  const aiRecommendationText = document.getElementById('aiRecommendationText');
-
-  const llmAnalysis = analysis.llm_analysis || {};
-  const summary = llmAnalysis.summary || 'AI analysis unavailable for this page.';
-  const recommendation = llmAnalysis.recommendation || '';
-
-  aiSummary.classList.remove('loading');
-  aiSummary.textContent = summary;
-
-  if (recommendation && recommendation.length > 0) {
-    aiRecommendation.style.display = 'flex';
-    aiRecommendationText.textContent = recommendation;
+  if (onUndo) {
+    undoBtn.hidden = false;
+    toastUndoAction = onUndo;
   } else {
-    aiRecommendation.style.display = 'none';
+    undoBtn.hidden = true;
+    toastUndoAction = null;
   }
+
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    t.classList.remove('show');
+    toastUndoAction = null;
+  }, 4000);
 }
 
-function showNoAnalysis() {
-  document.getElementById('noAnalysis').style.display = 'block';
-  document.getElementById('analysisResult').style.display = 'none';
-}
-
-function showError(message) {
-  displayAnalysisResult({
-    verdict: 'error',
-    score: 0,
-    evidence: [message],
-    timestamp: Date.now()
-  });
-}
-
-function showToast(message, type = 'info') {
-  document.querySelectorAll('.toast').forEach(t => t.remove());
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.classList.add('show'), 10);
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
-  }, 3000);
-}
-
-function getEvidenceIconType(item, verdict) {
-  const lower = item.toLowerCase();
-  if (lower.includes('suspicious') || lower.includes('risk') || lower.includes('warning') || lower.includes('⚠️')) {
-    return 'warning';
-  }
-  if (lower.includes('phish') || lower.includes('danger') || lower.includes('threat') || lower.includes('❌')) {
-    return 'danger';
-  }
-  return 'info';
-}
-
-function getEvidenceEmoji(type) {
-  const emojis = { info: 'ℹ️', warning: '⚠️', danger: '🚨' };
-  return emojis[type] || emojis.info;
-}
-
-function truncateUrl(url) {
-  if (url.length > 40) return url.slice(0, 37) + '...';
-  return url;
-}
-
-function formatTime(date) {
-  const now = new Date();
-  const diff = now - date;
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+/* ─── utilities ───────────────────────────────────────────────── */
+function fmtTime(date) {
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000)    return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+function escHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = String(str ?? '');
+  return d.innerHTML;
 }
